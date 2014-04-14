@@ -25,12 +25,7 @@ function wrapperFunction(wrapper) {
 
 function asyncFunction(target, fun, index) {
     
-    if(index !== undefined && (fun instanceof Number)) {
-        index = fun;
-        fun = target;
-        target = null;
-    }
-    if(fun !== undefined) {
+    if(index === undefined && (fun instanceof Number)) {
         index = fun;
         fun = target;
         target = null;
@@ -39,7 +34,8 @@ function asyncFunction(target, fun, index) {
     if(index === undefined) {
         index = -1;
     }
-    return wrapperFunction(function(success, args){
+    
+    var invoker = wrapperFunction(function(success, args){
         if(index >=0 ) {
             args.splice(index, 0, success);
         } else {
@@ -47,6 +43,10 @@ function asyncFunction(target, fun, index) {
         };
         fun.apply(target, args);
     });
+    invoker.invoke = invoker;
+    invoker.i = invoker;
+    
+    return invoker;
 }
 
 function dollarFunction(target, generator) {
