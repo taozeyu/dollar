@@ -3,11 +3,20 @@ module.exports.async = asyncFunction;
 module.exports.wrapper = wrapperFunction;
 module.exports.catcher = creatCatcher;
 module.exports.start = start;
+module exports.exception = exception;
 
 module.exports.a = asyncFunction;
 module.exports.w = wrapperFunction;
 module.exports.c = creatCatcher;
 module.exports.s = start;
+module.exports.e = exception;
+
+function exception(obj) {
+    if(obj && obj.constructor == ErrorNode) {
+        throw obj.err;
+    }
+    return obj;
+};
 
 function wrapperFunction(wrapper) {
     return function() {
@@ -28,7 +37,12 @@ function asyncFunction(target, fun, index) {
     if(index === undefined && (fun instanceof Number)) {
         index = fun;
         fun = target;
-        target = null;
+        target = undefined;
+    }
+    
+    if(fun === undefined && index === undefined) {
+        fun = target;
+        target = undefined;
     }
     
     if(index === undefined) {
@@ -41,6 +55,9 @@ function asyncFunction(target, fun, index) {
         } else {
             args.splice(args.length + index + 1, 0, success);
         };
+        if(target===undefined) {
+            target = this; //some time user will write ' fun$.apply(obj, args);'.
+        }
         fun.apply(target, args);
     });
     invoker.invoke = invoker;
@@ -73,13 +90,36 @@ function creatCatcher(params) {
     
     if(errorHandle === undefined) {
         errorHandle = function(err){
-            console.error(err.stack);
+            console.error(err);
         };
     }
     
     var invoke = function() {
-    
-        var gen = mainGenerator.apply(null, arguments);
+        
+        var main$ = dollarFunction(mainGenerator)
+            _arguments = arguments;
+        
+        var rootMainFun = function*() {
+            try {
+                var res = yield main$.apply(null, _arguments);
+                
+                if(res && res.constructor == ErrorNode) {
+                    if(errorHandle) {
+                        errorHandle(res.err);
+                    }
+                } else {
+                    if(successHandle) {
+                        successHandle(res);
+                    }
+                }
+            } catch(err) {
+                if(errorHandle) {
+                    errorHandle(err);
+                }
+            }
+        };
+        
+        var gen = rootMainFun.apply(null, arguments);
         var runtime = new PlatformRuntime(gen);
         var res = createDependentsTree(gen, runtime);
         
@@ -92,12 +132,7 @@ function creatCatcher(params) {
                 res.parentRuntime._setCatcher(this);
             }
             res.runtime = {
-                onSuccess : function(node, args, index) {
-                    var rs = (args.length > 1)? args: args[0];
-                    if(successHandle) {
-                        successHandle(rs);
-                    }
-                },
+                onSuccess : function(node, args, index) { },
                 onError : function(err) {
                     if(errorHandle) {
                         errorHandle(errNode.err);
@@ -190,7 +225,8 @@ function PlatformRuntime(gen) {
     this.waitCount = 0;
     
     this.onSuccess = function(node, args, index) {
-        var res = (args.length > 1)? args: args[0];
+        var res = (args.length > 1)? args: args[0],
+            rsobj;
         this.results[index] = res;
         this.waitCount--;
         
@@ -199,9 +235,10 @@ function PlatformRuntime(gen) {
         }
         res = this.needUnpack ? this.results[0] : this.results;
         
-        var rsobj = gotoNextSync(this.gen, this, res);
+        rsobj = gotoNextSync(this.gen, this, res);
+        
         if(rsobj.done) {
-            this.syncNode.onSuccess(rsobj.res);
+            this.syncNode.onSuccess(rsobj.results);
         } else {
             bindRuntime(this, rsobj);
             this.compliteTree();
@@ -240,27 +277,28 @@ function gotoNextSync(gen, runtime, lastResult) {
         res;
     
     while(true) {
-        var hasSyncNode = false;
+        var hasSyncNode = false,
+            next = null;
         
         try{
-            var next = gen.next(lastResult);
-            res = next.value;
-            if(next.done){
-                if(isNormalResult(res)) {
-                    return {done : true, results : res}; // include ErrorNode.
-                } else {
-                    try{
-                        throw "can't return SyncNode."
-                    } catch(err) {
-                        return {done : true, results : new ErrorNode(err, runtime)};
-                    }
-                }
-                return {done : true, results : res};
-            }
-        }
+            next = gen.next(lastResult);}
         catch (err) {
-            return {done : true, results : new ErrorNode(err, this)};
+            next = {done : true, value : new ErrorNode(err, this)};
         }
+        res = next.value;
+        if(next.done){
+            if(isNormalResult(res)) {
+                return {done : true, results : res}; // include ErrorNode.
+            } else {
+                try{
+                    throw "can't return SyncNode."
+                } catch(err) {
+                    return {done : true, results : new ErrorNode(err, runtime)};
+                }
+            }
+            return {done : true, results : res};
+        }
+        
         
         var needUnpack = true;
         
@@ -330,7 +368,7 @@ function bindRuntime(runtime, rsobj) {
 
 
 function createDependentsTree(gen, runtime) {
-
+    
     var rsobj = gotoNextSync(gen, runtime);
     
     if(rsobj.done) {
